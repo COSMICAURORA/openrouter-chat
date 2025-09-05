@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenRouter Chat</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --accent: #22c55e;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --user: #2563eb;
+      --assistant: #16a34a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(180deg, #0b1220, #0f172a);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      color: var(--text);
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+    header {
+      padding: 14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.02);
+      backdrop-filter: blur(6px);
+      position: sticky; top: 0; z-index: 2;
+    }
+    header .title {
+      font-weight: 700; letter-spacing: 0.3px;
+    }
+    main {
+      padding: 16px;
+      overflow-y: auto;
+    }
+    .chat {
+      max-width: 820px; margin: 0 auto;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .msg {
+      display: grid; grid-template-columns: 40px 1fr; gap: 12px;
+      padding: 12px; border-radius: 12px; background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .avatar {
+      width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center;
+      font-weight: 700; color: white;
+    }
+    .avatar.user { background: var(--user); }
+    .avatar.assistant { background: var(--assistant); }
+    .role {
+      font-size: 12px; color: var(--muted); margin-bottom: 6px;
+    }
+    .content { white-space: pre-wrap; line-height: 1.45; }
+    .toolbar {
+      max-width: 820px; margin: 10px auto 0; display: flex; gap: 8px; align-items: center; color: var(--muted);
+    }
+    footer {
+      border-top: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.02);
+      padding: 10px 12px;
+    }
+    .composer {
+      max-width: 820px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto;
+      gap: 10px; align-items: end;
+    }
+    textarea {
+      width: 100%; min-height: 56px; max-height: 200px; resize: vertical;
+      border-radius: 12px; padding: 12px 14px; border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.04); color: var(--text); outline: none;
+    }
+    button, select {
+      border-radius: 12px; border: 1px solid rgba(255,255,255,0.15);
+      padding: 12px 14px; background: var(--accent); color: #062312;
+      font-weight: 700; cursor: pointer;
+    }
+    button.secondary {
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+    }
+    .row { display: flex; gap: 8px; }
+    .hint { text-align: center; color: var(--muted); font-size: 12px; margin-top: 6px; }
+    .small { font-size: 12px; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title">OpenRouter Chat</div>
+  </header>
+
+  <main>
+    <div class="chat" id="chat"></div>
+    <div class="toolbar">
+      <div class="row">
+        <label for="model" class="small">Model:</label>
+        <select id="model">
+          <option value="openrouter/auto" selected>openrouter/auto (free-friendly)</option>
+          <option value="meta-llama/llama-3.1-8b-instruct:free">Llama 3.1 8B Instruct (if available)</option>
+          <option value="qwen/qwen-2.5-7b-instruct:free">Qwen 2.5 7B Instruct (if available)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="small" for="temp">Temp:</label>
+        <input type="range" id="temp" min="0" max="1" step="0.1" value="0.7" />
+        <span id="tempVal" class="small">0.7</span>
+      </div>
+      <button id="clear" class="secondary">Clear</button>
+    </div>
+  </main>
+
+  <footer>
+    <form class="composer" id="composer">
+      <textarea id="input" placeholder="Ask anything..." required></textarea>
+      <div class="row">
+        <button type="submit" id="send">Send</button>
+      </div>
+    </form>
+    <div class="hint">This is a demo UI. Your requests are sent through a local proxy to OpenRouter.</div>
+  </footer>
+
+  <script>
+    const chatEl = document.getElementById("chat");
+    const form = document.getElementById("composer");
+    const input = document.getElementById("input");
+    const sendBtn = document.getElementById("send");
+    const clearBtn = document.getElementById("clear");
+    const modelSel = document.getElementById("model");
+    const tempRange = document.getElementById("temp");
+    const tempVal = document.getElementById("tempVal");
+
+    let messages = [
+      { role: "system", content: "You are a helpful assistant." }
+    ];
+
+    function el(tag, attrs = {}, children = []) {
+      const e = document.createElement(tag);
+      Object.entries(attrs).forEach(([k, v]) => e.setAttribute(k, v));
+      children.forEach(c => {
+        if (typeof c === "string") e.appendChild(document.createTextNode(c));
+        else e.appendChild(c);
+      });
+      return e;
+    }
+
+    function render() {
+      chatEl.innerHTML = "";
+      messages
+        .filter(m => m.role !== "system")
+        .forEach(m => {
+          const role = m.role === "user" ? "User" : "Assistant";
+          const avatarClass = m.role === "user" ? "user" : "assistant";
+          const card = el("div", { class: "msg" }, [
+            el("div", { class: `avatar ${avatarClass}` }, [role[0]]),
+            el("div", {}, [
+              el("div", { class: "role" }, [role]),
+              el("div", { class: "content" }, [m.content])
+            ])
+          ]);
+          chatEl.appendChild(card);
+        });
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+
+    function setSending(sending) {
+      input.disabled = sending;
+      sendBtn.disabled = sending;
+      modelSel.disabled = sending;
+      tempRange.disabled = sending;
+      sendBtn.textContent = sending ? "Sending..." : "Send";
+    }
+
+    tempRange.addEventListener("input", () => {
+      tempVal.textContent = tempRange.value;
+    });
+
+    clearBtn.addEventListener("click", () => {
+      messages = [{ role: "system", content: "You are a helpful assistant." }];
+      render();
+      input.value = "";
+      input.focus();
+    });
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+
+      messages.push({ role: "user", content: text });
+      input.value = "";
+      render();
+
+      // Placeholder assistant message to show loading state
+      messages.push({ role: "assistant", content: "..." });
+      render();
+
+      try {
+        setSending(true);
+
+        const model = modelSel.value;
+        const temperature = Number(tempRange.value);
+
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages, model, temperature, max_tokens: 512 })
+        });
+
+        if (!res.ok) {
+          const error = await res.json().catch(() => ({}));
+          throw new Error(error.details || error.error || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        const reply = data.choices?.[0]?.message?.content || "(No response)";
+
+        // Replace last "..." placeholder with real content
+        messages[messages.length - 1] = { role: "assistant", content: reply };
+        render();
+      } catch (err) {
+        console.error(err);
+        messages[messages.length - 1] = { role: "assistant", content: `Error: ${err.message}` };
+        render();
+      } finally {
+        setSending(false);
+        input.focus();
+      }
+    });
+
+    // Initial render
+    render();
+  </script>
+</body>
+</html>
